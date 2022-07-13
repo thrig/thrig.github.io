@@ -1,0 +1,110 @@
+<h1 id="shellelimination">Shell Elimination</h1>
+
+<p>Periodically I try to reduce the number of shell scripts in the
+<a href="https://github.com/thrig/scripts">scripts repository</a>. This may
+occasion a diversion to talk (again) about words; some express confusion
+over the term &#8220;C script&#8221; expecting perhaps instead &#8220;C program&#8221; even
+though the C code is in a scripts repository and the C code does
+script-like things. Most in fact were written in Perl or sometimes
+shell; does rewriting them in C programify them? Larry Wall has
+ruminated on this before.</p>
+
+<blockquote>
+<p>Suppose you went back to Ada Lovelace and asked her the difference
+between a script and a program. She&#8217;d probably look at you funny, then
+say something like: Well, a script is what you give the actors, but a
+program is what you give the audience.</p>
+</blockquote>
+
+<p>Others have extended the term &#8220;shell script&#8221; to include things written
+in Perl, Ruby, TCL, but not C. This leads to miscommunications</p>
+
+<pre><code>&lt; thrig&gt; shell scripts being only 17% of my custom bin directories
+&lt; eea&gt; mine is luke total opposite with well over 80% shell scripts
+&lt; eea&gt; i count perl and tcl among my shell scripts
+</code></pre>
+
+<p>and then issues classifying code; is this a script?</p>
+
+<pre><code>$ cat pwd
+#|
+eval 'exec sbcl --script &quot;$0&quot; ${1+&quot;$@&quot;}'
+|#
+(require 'sb-posix)
+(format t &quot;~a~%&quot; (sb-posix:getcwd))
+$ chmod +x pwd
+$ ./pwd
+/tmp
+</code></pre>
+
+<p>and what about this?</p>
+
+<pre><code>$ cat pwd2.lisp
+(require 'sb-posix)
+(defun pwd () (format t &quot;~a~%&quot; (sb-posix:getcwd)))
+(sb-ext:save-lisp-and-die &quot;pwd2&quot; :executable t :toplevel 'pwd)
+$ sbcl --script pwd2.lisp
+$ ./pwd2
+/tmp
+</code></pre>
+
+<p>Perhaps a script is interpreted, not compiled? That rules out Perl:</p>
+
+<pre><code>$ perl -MO=Concise -MCwd -E 'say getcwd'
+8  &lt;@&gt; leave[1 ref] vKP/REFC -&gt;(end)
+1     &lt;0&gt; enter v -&gt;2
+2     &lt;;&gt; nextstate(main 349 -e:1) v:%,us,{,fea=15 -&gt;3
+7     &lt;@&gt; say vK -&gt;8
+3        &lt;0&gt; pushmark s -&gt;4
+6        &lt;1&gt; entersub[t2] lKS/TARG -&gt;7
+-           &lt;1&gt; ex-list lK -&gt;6
+4              &lt;0&gt; pushmark s -&gt;5
+-              &lt;1&gt; ex-rv2cv sK/NO(),CONST,1 -&gt;-
+5                 &lt;#&gt; gv[*getcwd] s -&gt;6
+-e syntax OK
+</code></pre>
+
+<p>Maybe instead call the lot of them apps?</p>
+
+<h2 id="shellelimination">Shell Elimination</h2>
+
+<p><code>grep</code> is a bad tool for the task of shell elimination as one is
+only interested in the first line, and <code>grep</code> tends to process more
+than that and thus turns up more false positives. It is shorter to
+write, though.</p>
+
+<pre><code>$ git grep -cE '[/ ][jz]?sh\b' | wc -l
+      67
+$ perl -nE 'm{[ /][jz]?sh\b}&amp;&amp;say $ARGV;close ARGV' `git ls-files` \
+  | wc -l
+      39
+</code></pre>
+
+<p>This turns up little exec wrappers and other things too simple to write
+in something else</p>
+
+<pre><code>#!/bin/sh
+exec tmux -u new-session -A -c &quot;$HOME&quot; -s &quot;${1:?need a session name}&quot;
+</code></pre>
+
+<p>so nothing to eliminate at the moment.</p>
+
+<p>On the other hand a lot of the scripts could be written as shell aliases
+or functions. However, this would bloat the shell which may then slow
+down <code>fork(2)</code> calls, or, worse, would make them only accessible from
+the shell, which is problematic if one often switches between <code>ksh</code> and
+<code>zsh</code>, or wants to <code>exec(3)</code> one of the tools without having to run
+through the complexity (and therefore attack surface) of a very large
+shell such as <code>zsh</code>.</p>
+
+<h2 id="whyeliminatetheshell">Why Eliminate the Shell?</h2>
+
+<p>While the shell is suitable for wrangling one liners it is not a very
+good programming language, so if there is something problematic like a
+<code>while</code> loop or too much code, I switch to another language, usually
+well before the script reaches 20 lines. The shell can be a rich source
+of security flaws; using a simpler <code>exec(3)</code> call over <code>system(3)</code> can
+prevent arbitrary shell code exec especially when untrusted user input
+is involved. Less amusing was having to explain this, the various
+exploits, and the ramifications thereof to members of a Computer Science
+department after having reviewed some of their code.</p>
