@@ -1,0 +1,79 @@
+<html lang="en"><head><title>DPRT/10</title>
+<link href="/etc/style.css" rel="stylesheet" type="text/css">
+</head><body>
+<h1>10</h1>
+
+<p>The number 10 is a bit tricky; it exists in every base (and is also a
+notable street address). This is mostly a concern in systems where one
+can change the base (lojban, using <em>ju&#39;u</em>) or worse where changing the
+base changes how the entire system behaves, which in turn can make
+changing the base again difficult. Forth implementations may have this,
+um, feature, for better or worse.</p>
+
+<blockquote><pre><code>2  base !    \ 2 address-of-base write-value
+16 base !    \ error -- 16 is not a known word
+</code></pre></blockquote>
+
+<p>16 is not a valid number in base 2. Solutions here include pre-loading
+the stack with the necessary values (difficult), converting the
+(decimal) 16 to a form suitable for the current base, or to use a
+literal numeric form that is always in a particular base or includes the
+base along with the value. <a href="https://gigamonkeys.com/book/numbers-characters-and-strings.html">Common LISP supports this last
+form</a>;
+other languages tend to accrue such in non-standard or incremental ways,
+if at all.</p>
+
+<blockquote><pre><code>$ sbcl --noinform --eval &#39;(progn (format t &quot;~d~%&quot; #2R10000) (quit))&#39;
+16
+$ sbcl --noinform --eval &#39;(progn (format t &quot;~d~%&quot; #b10000) (quit))&#39;
+16
+$ cfu &#39;printf(&quot;%d\n&quot;, 0b10000)&#39;
+... warning: binary integer literals are a GNU extension
+        printf(&quot;%d\n&quot;, 0b10000);
+                       ^
+1 warning generated.
+16
+</code></pre></blockquote>
+
+<p>Conversion to a particular base might run something along the lines of:</p>
+
+<blockquote><pre><code>#!/usr/bin/env perl
+#
+# 10 - add 10 to the stack in base 2, 8, 10, and 16
+
+use 5.32.0;
+use warnings;
+use experimental &#39;signatures&#39;;
+use Carp &#39;croak&#39;;
+use Language::Eforth;
+our $f = Language::Eforth-&gt;new;
+
+my $base = 10;
+for my $newbase (qw(2 8 10 16)) {
+    my $enc = inbase( $newbase, $base );
+    $f-&gt;eval(&quot;$enc base !\n10\n&quot;);
+    $base = $newbase;
+}
+# back to base 10 - embed supports $hexnumber for literal input,
+# probably better than the inbase conversion (but less educational)
+$f-&gt;eval( &#39;$A base !&#39; . &quot; .s\n&quot; );
+
+# this could also be done with an &quot;alphabet&quot;, see Number::AnyBase; ANS
+# FORTH and Common LISP however restrict the base to 2..36
+sub inbase ( $n, $base = 10 ) {
+    croak &quot;N must be positive&quot;              if $n &lt; 0;
+    croak &quot;base must be in the range 2..36&quot; if $base &lt; 2 or $base &gt; 36;
+    return $n                               if $base == 10;
+    my $str = &#39;&#39;;
+    while (1) {
+        my $mod = $n % $base;
+        $n = int( $n / $base );
+        # PORTABILITY not everything uses ASCII
+        $mod = chr( 55 + $mod ) if $mod &gt; 9;
+        $str = $mod . $str;
+        last if $n == 0;
+    }
+    return $str;
+}
+</code></pre></blockquote>
+</body></html>
