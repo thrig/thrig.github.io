@@ -1,0 +1,144 @@
+<html lang="en"><head><title>DPRT/pledge</title>
+<link href="/etc/style.css" rel="stylesheet" type="text/css">
+</head><body>
+<h1><code>pledge(2)</code></h1>
+
+<p>Now that the harddisk of the OpenBSD laptop has been revived in a new
+(even older, 2008!) system with a mostly working spacebar, I can go back
+to putting <a href="http://man.openbsd.org/man2/pledge.2">pledge</a> into my
+scripts. This is a simple process: add a pledge call, possibly
+pre-seeding it with suitable categories to allow,</p>
+
+<blockquote><pre><code>if (pledge(&quot;stdio&quot;, NULL) == -1)
+    err(1, &quot;pledge failed&quot;);
+</code></pre></blockquote>
+
+<p>then iterate on <code>make program &amp;&amp; ./program</code> possibly with <code>entr</code>
+automatically running that when <code>program.c</code> changes. Then, look at
+<code>/var/log/messages</code> to see why the program was aborted,</p>
+
+<blockquote><pre><code>Jul 15 23:38:34 leno /bsd: canary-dns[69674]: pledge &quot;rpath&quot;, syscall 5
+</code></pre></blockquote>
+
+<p>update the allowed categories,</p>
+
+<blockquote><pre><code>if (pledge(&quot;rpath stdio&quot;, NULL) == -1)
+    err(1, &quot;pledge failed&quot;);
+</code></pre></blockquote>
+
+<p>and repeat.</p>
+
+<blockquote><pre><code>Jul 15 23:38:47 leno /bsd: canary-dns[38129]: pledge &quot;inet&quot;, syscall 97
+</code></pre></blockquote>
+
+<p>Complicated programs will take more work, as they might have an <code>exec</code>
+hidden in some branch, or other features (bloat) that digging through
+the source code (or living with random process aborts) might surface.
+Another option: simplify the program, <a href="https://github.com/thrig/rogue36/commit/863bf87f38f6f19dce66bd818f328c767e972340">remove needless
+features</a>.</p>
+
+<p>Sometimes the <code>messages</code> file will not give the information necessary to
+rectify oddball system calls, therefore <code>ktrace ./program; kdump -f
+ktrace.out</code> and work upwards from the bottom to find the calls that
+caused the program to fail. And maybe ask on the #openbsd IRC channel
+when you get stuck. Some nuance may be required to pick the best
+category for the system calls involved.</p>
+
+<h2>Multipledge</h2>
+
+<p>The above method assumes a single <code>pledge</code> call, which may suffice for
+simple scripts. One improvement (at the cost of taking more time to
+implement) is to make a series of <code>pledge</code> calls. For example, a script
+that collects network data, once, might start out with</p>
+
+<blockquote><pre><code>    if (pledge(&quot;dns inet stdio unveil&quot;, NULL) == -1)
+            err(1, &quot;pledge failed&quot;);
+    // network calls here ...
+</code></pre></blockquote>
+
+<p>and then before processing the data drop the <code>dns inet</code> rights; this
+means bugs in the data processing code will not give an attacker access
+to the network, only to what <code>stdio</code> allows:</p>
+
+<blockquote><pre><code>    if (pledge(&quot;stdio&quot;, NULL) == -1) err(1, &quot;pledge failed&quot;);
+    // process result of prior network calls here ...
+</code></pre></blockquote>
+
+<p>It may help to think about the <code>pledge</code> design for a new script before
+the coding starts; some designs may require significant reworks (like,
+if there is a random fork to make DNS calls) to better fit the pledge
+model. But <code>irssi</code> probably dates from before when async DNS libraries
+were readily available.</p>
+
+<h2><code>unveil(2)</code></h2>
+
+<p>But wait, there&#39;s more! With <code>unveil</code> allowed</p>
+
+<blockquote><pre><code>    if (pledge(&quot;inet rpath stdio unveil&quot;, NULL) == -1)
+            err(1, &quot;pledge failed&quot;);
+</code></pre></blockquote>
+
+<p>a series of <code>unveil(2)</code> calls can restrict filesystem access. Here
+<code>ktrace</code> is really necessary, as who knows what files the program and
+libraries involved actually touch, or whether the program will give any
+sort of error message should a critical file be unreadable.</p>
+
+<blockquote><pre><code>$ kdump -f ktrace.out | grep NAMI
+ 89250 ktrace   NAMI  &quot;./canary-dns&quot;
+ 89250 canary-dns NAMI  &quot;/etc/resolv.conf&quot;
+ 89250 canary-dns NAMI  &quot;/dev/urandom&quot;
+ 89250 canary-dns NAMI  &quot;/etc/hosts&quot;
+</code></pre></blockquote>
+
+<p>One might deny access to <code>/etc/hosts</code> if one is only interested in
+letting the program make DNS queries, but otherwise the above might
+result in:</p>
+
+<blockquote><pre><code>    if (unveil(&quot;/dev/urandom&quot;, &quot;r&quot;) == -1) err(1, &quot;unveil failed&quot;);
+    if (unveil(&quot;/etc/hosts&quot;, &quot;r&quot;) == -1) err(1, &quot;unveil failed&quot;);
+    if (unveil(&quot;/etc/resolv.conf&quot;, &quot;r&quot;) == -1) err(1, &quot;unveil failed&quot;);
+    if (unveil(NULL, NULL) == -1) err(1, &quot;unveil failed&quot;);
+</code></pre></blockquote>
+
+<p>This results in a program that can make <code>inet</code> calls and interact with
+<code>stdio</code> and can read three files. Not much effort was required to
+implement these restrictions. More could be done via firewall rules to
+restrict network access, though that would likely get in the way of
+being able to query arbitrary DNS servers at arbitrary ports, and would
+not for this program improve the security; security systems that get in
+my way are not a way I like to go.</p>
+
+<h2>Meanwhile, on Linux</h2>
+
+<blockquote><pre><code>localhost:~# make seccomp
+cc     seccomp.c   -o seccomp
+seccomp.c: In function &#39;install_syscall_filter&#39;:
+seccomp.c:11:19: error: expected identifier or &#39;(&#39; before &#39;[&#39; token
+   11 | struct sock_filter[] = {
+      |                   ^
+seccomp.c:25:40: error: &#39;filter&#39; undeclared (first use in this function)
+   25 |         .len = (unsigned short)(sizeof(filter)/sizeof(filter[0])),
+      |                                        ^~~~~~
+seccomp.c:25:40: note: each undeclared identifier is reported only once for each function it appears in
+make: *** [&lt;builtin&gt;: seccomp] Error 1
+</code></pre></blockquote>
+
+<p>Yeah...</p>
+
+<p>Granted, I did not try too hard before giving up. Maybe some other
+random blog post might have code with less bitrot in it? Why is the
+documentation so bad, and so hard to find? The severe split-brain
+between userland and kernel probably does not help. Worse <em>is</em> better.
+Perhaps something like
+<a href="https://github.com/seccomp/libseccomp">libseccomp</a> might be more
+usable, or maybe
+<a href="https://www.kernel.org/doc/html/latest/userspace-api/landlock.html">landlock</a>
+or <a href="https://wiki.archlinux.org/title/Firejail">firejail</a> (mmm, a <em>suid</em>
+binary) or an effort to <a href="http://justine.lol/pledge/">port pledge</a>
+might work?</p>
+
+<p>Others <a href="https://blog.habets.se/2022/03/seccomp-unsafe-at-any-speed.html">look at the foundations and raise eyebrows</a>
+and mirror my opinion of
+<a href="https://www.ctrl.blog/entry/selinux-unmanageable.html">selinux</a> which I
+recall getting in my way, a lot, before I disabled it.</p>
+</body></html>
