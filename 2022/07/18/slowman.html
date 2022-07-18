@@ -1,0 +1,40 @@
+<html lang="en"><head><title>DPRT/slowman</title>
+<link href="/etc/style.css" rel="stylesheet" type="text/css">
+</head><body>
+<h1>Why is <code>man</code> so slow on Mac OS X?</h1>
+
+<p>(Besides running it on a 2009 macbook with a spinny metal hardrive.)</p>
+
+<blockquote><pre><code> |   \-+= 64062 man 1 less
+ |     \-+- 64065 sh -c (cd &#39;/opt/local/share/man&#39; &amp;&amp; /opt/local/bin/gunzip -c &#39;/opt/local/share/man/man1/less.1.gz&#39; | /opt/local/bin/tbl | /opt/local/bin/groff -P-c -Wall -mtty-char -Tascii -mandoc -c | (less || true))
+ |       \-+- 64066 sh -c (cd &#39;/opt/local/share/man&#39; &amp;&amp; /opt/local/bin/gunzip -c &#39;/opt/local/share/man/man1/less.1.gz&#39; | /opt/local/bin/tbl | /opt/local/bin/groff -P-c -Wall -mtty-char -Tascii -mandoc -c | (less || true))
+ |         \-+- 64070 sh -c (cd &#39;/opt/local/share/man&#39; &amp;&amp; /opt/local/bin/gunzip -c &#39;/opt/local/share/man/man1/less.1.gz&#39; | /opt/local/bin/tbl | /opt/local/bin/groff -P-c -Wall -mtty-char -Tascii -mandoc -c | (less || true))
+ |           \--- 64071 less
+</code></pre></blockquote>
+
+<p>Yikes. In theory there is a cached <code>/opt/local/share/man/cat1/less.1</code>
+that <code>man</code> should be using, but that does not excuse the lingering
+sprawl of shell scripts. I guess it is time to trace the <code>man</code> process
+to see why it missed the cache, and to consider a rewrite; for me, a
+well-designed <code>man</code> would replace itself with <code>exec pager
+/path/to/man/page.1</code>, though a requirement to support compressed pages
+might complicate that. (Yes, I know about the <a href="https://seclists.org/fulldisclosure/2014/Nov/74">LESSOPEN
+magic</a>.) Also why is
+the shell doing a <code>chdir</code> but then passing fully qualified paths to
+<code>gunzip</code>? And there&#39;s probably a more efficient way to ignore the exit
+status word of the pager than <code>|| true</code> in a subshell.</p>
+
+<p>Tracing <code>man</code> shows a lot of <code>fstat64</code> calls (<code>POSIX</code>, <code>PO</code>,
+<code>en_US.UTF-8</code>, <code>en_US</code>, and <code>en</code> for every directory in <code>MANPATH</code>). This
+also surfaced some man page directories I didn&#39;t know about. I have no
+idea how <code>man</code> is finding them: they are not listed in <code>man.conf</code> nor in
+<code>MANPATH</code> nor even documented. <code>man.conf</code> has <code>NOAUTOPATH</code> set. And
+tracing shows no indications <code>man</code> knows anything about any <code>cat</code> cache
+directories, despite that being documented. How quickly one must turn to
+slogging through the source.</p>
+
+<p>Also it might be nice to support (or import) man pages for multiple
+Operating Systems; this would avoid having to fire up a browser and deal
+with the network delays, remote site unreliability, and worries about
+browser security for what should fast and easy to read documentation...</p>
+</body></html>
