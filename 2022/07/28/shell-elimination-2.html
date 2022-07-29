@@ -1,0 +1,127 @@
+<html lang="en"><head><title>DPRT/shell-elimination-2</title>
+<link href="/etc/style.css" rel="stylesheet" type="text/css">
+</head><body>
+<h2>Shell Elimination: First Blood, Part II</h2>
+
+<blockquote><pre><code>echo &quot;è&quot; | xxd
+</code></pre></blockquote>
+
+<p>A claim made about the previous line is that &quot;the shell is encoding in
+UTF-8&quot;. My claim is that the unix shell is not relevant here. First, a
+brief detour into math where the following technique was probably
+first learned.</p>
+
+<blockquote><pre><code>2 + z = 4 + 2
+</code></pre></blockquote>
+
+<p>One simplification is to eliminate the 2 on both sides. In more
+complicated equations there would be multiple such steps. Likewise, can
+we remove the shell from the pipeline, above? If the shell is necessary,
+then it will be impossible to remove. First,</p>
+
+<blockquote><pre><code>/bin/echo &quot;è&quot; | xxd
+</code></pre></blockquote>
+
+<p>Some but not all shells have a <code>builtin</code> for <code>echo</code>. We can eliminate
+that by using an external <code>echo</code>, or better yet <code>printf</code> as <code>echo</code> is
+really terrible for portability. As far as I know no shell has a
+<code>builtin</code> for <code>xxd</code>, but the same trick would eliminate that <code>builtin</code>
+in favor of a dependency on <code>vim</code>; <code>hexdump</code> or even <code>od</code> would likely
+suffice, and are probably more portable than <code>vim</code> is.</p>
+
+<p>The next step is complicated due to <code>|</code> doing a lot of work; it saves
+programmer time at the expense of CPU. <code>|</code> basically wires up one
+program to another. Probably you&#39;ll want better error checking?</p>
+
+<blockquote><pre><code>#include &lt;unistd.h&gt;
+int main(int argc, char *argv[]) {
+    int pair[2];
+    pipe(pair);
+    pid_t pid = fork();
+    if (pid) {
+        close(pair[0]);
+        if (pair[1] != STDOUT_FILENO) {
+            dup2(pair[1], STDOUT_FILENO);
+            close(pair[1]);
+        }
+        // TODO echo
+    } else {
+        close(pair[1]);
+        if (pair[0] != STDIN_FILENO) {
+            dup2(pair[0], STDIN_FILENO);
+            close(pair[0]);
+        }
+        // TODO xxd
+    }
+    return 0;
+}
+</code></pre></blockquote>
+
+<p>An observant reader might somewhere along the line wonder if <code>echo</code> and
+<code>xxd</code> could be eliminated, but for now the goal is to run the original
+commands without a shell. An even more observant reader might wonder how
+the fancy è is being input (it&#39;s giving me some trouble in <code>vi</code>).
+Anyways, some boilerplate <code>exec(3)</code> work may result in</p>
+
+<blockquote><pre><code>#include &lt;unistd.h&gt;
+int main(int argc, char *argv[]) {
+    int pair[2];
+    pipe(pair);
+    pid_t pid = fork();
+    if (pid) {
+        close(pair[0]);
+        if (pair[1] != STDOUT_FILENO) {
+            dup2(pair[1], STDOUT_FILENO);
+            close(pair[1]);
+        }
+        execlp(&quot;echo&quot;, &quot;echo&quot;, *++argv, (char *) 0);
+    } else {
+        close(pair[1]);
+        if (pair[0] != STDIN_FILENO) {
+            dup2(pair[0], STDIN_FILENO);
+            close(pair[0]);
+        }
+        execlp(&quot;xxd&quot;, &quot;xxd&quot;, (char *) 0);
+    }
+    return 0;
+}
+</code></pre></blockquote>
+
+<p>which is not pretty, but gets the job done.</p>
+
+<blockquote><pre><code>% make pipe2
+cc     pipe2.c   -o pipe2
+% ./pipe2 foo
+% 00000000: 666f 6f0a                                foo.
+
+% ./pipe2 è
+% 00000000: c3a8 0a                                  ...
+</code></pre></blockquote>
+
+<p>Technically you would want yet another <code>fork</code> and then a parent process
+to wait for the children to complete, but that is a minor detail. We are
+notably still using the shell (it is, after all, good for some things)
+but it will not take much imagination to figure out how to eliminate
+that; a TTY could spawn a program that gets user input (ideally without
+using <code>gets(3)</code>) and replaces the <code>*++argv</code> bit with where that input
+got saved to. No shell.</p>
+
+<p>So what&#39;s wrong with &quot;the shell is encoding in UTF-8&quot; claim? The shell
+only pushes the bytes around, and can be replaced with a small C
+program. The <em>terminal</em> put the bytes there, somehow (keyboard input,
+clipboard, other). In this case, the bytes happaned to be UTF-8. If the
+shell is &quot;encoding in UTF-8&quot;, then what is this encoding:</p>
+
+<blockquote><pre><code>% read -r INPUT &lt; /dev/random
+% echo $INPUT
+</code></pre></blockquote>
+
+<p>Garbage in, garbage out. <code>reset</code> may be of use, if you actually ran the
+prior commands.</p>
+
+<p>(A warning about the clipboard, and possibly also terminals: there might
+be code that helpfully converts input into some other form, e.g.
+automatic unicode normalization, or assumptions about what a stream of
+random bytes mean. Such features can mangle bytes in hilarious ways, and
+complicate testing.)</p>
+</body></html>
